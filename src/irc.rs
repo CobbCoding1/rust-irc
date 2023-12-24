@@ -11,14 +11,25 @@ pub struct Client {
     server: String,
 }
 
+#[derive(Debug)]
 pub enum ClientErrors {
     ConnectionError,
-    NoMessageError,
     WriteError,
     ReadError,
     FlushError,
     ConversionError,
-    NoError,
+}
+
+impl std::fmt::Display for ClientErrors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", match self {
+            Self::ConnectionError => "Could not connect",
+            Self::WriteError      => "Could not write to stream",
+            Self::ReadError       => "Could not read from stream",
+            Self::FlushError      => "Could not flush stream",
+            Self::ConversionError => "Could not convert message",
+        })
+    }
 }
 
 impl Client {
@@ -33,62 +44,36 @@ impl Client {
         }
     }
 
-    pub fn auth(&mut self, nickname: &str, password: &str) {
-        match self.say(&format!("PASS {}\r\n", password)) {
-            ClientErrors::NoError => {
-                let nick = format!("NICK {}\r\n", nickname);
-                match self.say(&nick) {
-                    ClientErrors::NoError => ClientErrors::NoError,
-                    e => e,
-                }
-            },
-            e => e,
-        };
+    pub fn auth(&mut self, nickname: &str, password: &str) -> Result<(), ClientErrors> {
+        self.say(&format!("PASS {}\r\n", password))?;
+        self.say(&format!("NICK {}\r\n", nickname))
     }
 
-    pub fn read_message(&mut self) -> Result<Message, ClientErrors> {
+    pub fn read_message(&mut self) -> Result<Option<Message>, ClientErrors> {
         let mut buf = [0 as u8; 128];
-        match self.stream.read(&mut buf) {
-            Ok(_) => {
-                if let Ok(str) = std::str::from_utf8(&buf) {
-                    if str.contains("PRIVMSG") {
-                        let msg = self.parse_message(str.to_string());
-                        return Ok(msg);
-                    }
-                    Err(ClientErrors::NoMessageError)
-                } else {
-                    Err(ClientErrors::ConversionError)
-                }
-            },
-            Err(_) => Err(ClientErrors::ReadError)
+        self.stream.read(&mut buf).map_err(|_| ClientErrors::ReadError)?;
+        let str = std::str::from_utf8(&buf).map_err(|_| ClientErrors::ConversionError)?;
+        if str.contains("PRIVMSG") {
+            let msg = self.parse_message(str.to_string());
+            Ok(Some(msg))
+        } else {
+            Ok(None)
         }
     }
 
-    pub fn join(&mut self) -> ClientErrors {
-        match self.say(&format!("JOIN #{}", self.server)) {
-            ClientErrors::NoError => ClientErrors::NoError,
-            e => e,
-        }
+    pub fn join(&mut self) -> Result<(), ClientErrors> {
+        self.say(&format!("JOIN #{}", self.server))
     }
 
-    pub fn say(&mut self, message: &str) -> ClientErrors {
-        match self.stream.write(format!("{}\r\n", message).as_bytes()) {
-            Ok(_) => {
-                match self.stream.flush() {
-                    Ok(_) => return ClientErrors::NoError,
-                    Err(_) => return ClientErrors::FlushError,
-                }
-            },
-            Err(_) => return ClientErrors::WriteError,
-        };
+    pub fn say(&mut self, message: &str) -> Result<(), ClientErrors> {
+        self.stream.write(format!("{}\r\n", message).as_bytes()).map_err(|_| ClientErrors::WriteError)?;
+        self.stream.flush().map_err(|_| ClientErrors::WriteError)?;
+        Ok(())
     }
 
 
-    pub fn private_message(&mut self, message: &str) -> ClientErrors {
-        match self.say(&format!("PRIVMSG #{} :{}", self.server, message)) {
-            ClientErrors::NoError => ClientErrors::NoError,
-            e => e,
-        }
+    pub fn private_message(&mut self, message: &str) -> Result<(), ClientErrors> {
+        self.say(&format!("PRIVMSG #{} :{}", self.server, message))
     }
 
     fn parse_message(&mut self, buf: String) -> Message {
