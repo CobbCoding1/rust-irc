@@ -49,16 +49,24 @@ impl Client {
         self.say(&format!("NICK {}\r\n", nickname))
     }
 
+    pub fn handle_ping(&mut self, str: &str) -> Result<(), ClientErrors> {
+        let output = str.strip_prefix("PING ").ok_or(ClientErrors::ConversionError)?;
+        self.say(&format!("PONG {}", output))?;
+        println!("PONG {output}");
+        Ok(())
+    }
+
     pub fn read_message(&mut self) -> Result<Option<Message>, ClientErrors> {
         let mut buf = [0 as u8; 128];
         self.stream.read(&mut buf).map_err(|_| ClientErrors::ReadError)?;
         let str = std::str::from_utf8(&buf).map_err(|_| ClientErrors::ConversionError)?;
         if str.contains("PRIVMSG") {
             let msg = self.parse_message(str.to_string());
-            Ok(Some(msg))
-        } else {
-            Ok(None)
+            return Ok(Some(msg));
+        } else if str.starts_with("PING") {
+            self.handle_ping(str)?;
         }
+        Ok(None)
     }
 
     pub fn join(&mut self) -> Result<(), ClientErrors> {
